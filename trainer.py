@@ -27,8 +27,9 @@ class Params(object):
 
         self.deformator_lr = 0.0001
         self.shift_predictor_lr = 0.0001
+        self.regressor_lr = 0.0001
         self.n_steps = int(1e+5)
-        self.batch_size = 32
+        self.batch_size = 1
 
         self.directions_count = None
         self.max_latent_dim = None
@@ -180,9 +181,10 @@ class Trainer(object):
         if step % self.p.steps_per_save == 0 and step > 0:
             self.save_models(deformator, shift_predictor, step)
 
-    def train(self, G, deformator, shift_predictor, multi_gpu=False):
+    def train(self, G, deformator, shift_predictor, latent_regressor, multi_gpu=False):
         G.cuda().eval()
         deformator.cuda().train()
+        latent_regressor.cuda().train()
         shift_predictor.cuda().train()
 
         should_gen_classes = is_conditional(G)
@@ -193,16 +195,30 @@ class Trainer(object):
             if deformator.type not in [DeformatorType.ID, DeformatorType.RANDOM] else None
         shift_predictor_opt = torch.optim.Adam(
             shift_predictor.parameters(), lr=self.p.shift_predictor_lr)
+        regressor_opt = torch.optim.Adam(latent_regressor.parameters(), lr=self.p.regressor_lr)
 
         avgs = MeanTracker('percent'), MeanTracker('loss'), MeanTracker('direction_loss'),\
-               MeanTracker('shift_loss')
-        avg_correct_percent, avg_loss, avg_label_loss, avg_shift_loss = avgs
+               MeanTracker('shift_loss') , MeanTracker('regressor_loss')
+        avg_correct_percent, avg_loss, avg_label_loss, avg_shift_loss, avg_regressor_loss = avgs
 
         recovered_step = self.start_from_checkpoint(deformator, shift_predictor)
         for step in range(recovered_step, self.p.n_steps, 1):
             G.zero_grad()
             deformator.zero_grad()
             shift_predictor.zero_grad()
+            regressor_opt.zero_grad()
+
+            z = make_noise(self.p.batch_size, G.dim_z, self.p.truncation).cuda()
+            weight_dim = 2.0*torch.rand((self.p.batch_size,self.p.directions_count),device='cuda') - 1
+            shifted_z = deformator(weight_dim)
+            imgs = G(z)
+            imgs_shifted = G.gen_shifted(z,shifted_z)
+            predicted_shift = latent_regressor(imgs.detach(),imgs_shifted.detach())
+            regressor_loss =  torch.mean(torch.abs(predicted_shift - weight_dim))
+            regressor_loss.backward()
+            regressor_opt.step()
+
+            deformator_opt.zero_grad()
 
             z = make_noise(self.p.batch_size, G.dim_z, self.p.truncation).cuda()
             target_indices, shifts, basis_shift = self.make_shifts(deformator.input_dim)
@@ -223,8 +239,16 @@ class Trainer(object):
             logit_loss = self.p.label_weight * self.cross_entropy(logits, target_indices)
             shift_loss = self.p.shift_weight * torch.mean(torch.abs(shift_prediction - shifts))
 
+            z = make_noise(self.p.batch_size, G.dim_z, self.p.truncation).cuda()
+            weight_dim = 2.0*torch.rand((self.p.batch_size,self.p.directions_count),device='cuda') - 1
+            shifted_z = deformator(weight_dim)
+            imgs = G(z)
+            imgs_shifted = G(z,shifted_z)
+            predicted_shift = latent_regressor(imgs,imgs_shifted)
+            regressor_loss =  torch.mean(torch.abs(predicted_shift - weight_dim))
+
             # total loss
-            loss = logit_loss + shift_loss
+            loss = logit_loss + shift_loss + regressor_loss
             loss.backward()
 
             if deformator_opt is not None:
@@ -237,6 +261,7 @@ class Trainer(object):
             avg_loss.add(loss.item())
             avg_label_loss.add(logit_loss.item())
             avg_shift_loss.add(shift_loss)
+            avg_regressor_loss.add(regressor_loss.item())
 
             self.log(G, deformator, shift_predictor, step, avgs)
 
