@@ -85,6 +85,7 @@ def main():
     params.max_latent_dim = int(deformator.out_dim)
 
     trainer = Trainer(params, out_dir=args.out)
+    trainer.set_seed(args.seed)
     trainer.train(G, deformator, shift_predictor, multi_gpu=args.multi_gpu)
 
     save_results_charts(G, deformator, params, trainer.log_dir)

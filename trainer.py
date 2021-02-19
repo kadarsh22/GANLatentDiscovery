@@ -10,6 +10,8 @@ from utils import make_noise, is_conditional
 from train_log import MeanTracker
 from visualization import make_interpolation_chart, fig_to_image
 from latent_deformator import DeformatorType
+import numpy as np
+import random
 
 
 class ShiftDistribution(Enum):
@@ -66,6 +68,17 @@ class Trainer(object):
         self.writer = SummaryWriter(tb_dir)
         self.out_json = os.path.join(self.log_dir, 'stat.json')
         self.fixed_test_noise = None
+
+
+    @staticmethod
+    def set_seed(seed):
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        np.random.seed(seed)
+        random.seed(seed)
+        os.environ['PYTHONHASHSEED'] = str(seed)
 
     def make_shifts(self, latent_dim):
         target_indices = torch.randint(
