@@ -29,7 +29,7 @@ class Params(object):
         self.shift_predictor_lr = 0.0001
         self.regressor_lr = 0.0001
         self.n_steps = int(1e+5)
-        self.batch_size = 1
+        self.batch_size = 128
 
         self.directions_count = None
         self.max_latent_dim = None
@@ -206,10 +206,12 @@ class Trainer(object):
             G.zero_grad()
             deformator.zero_grad()
             shift_predictor.zero_grad()
-            regressor_opt.zero_grad()
+            latent_regressor.zero_grad()
 
             z = make_noise(self.p.batch_size, G.dim_z, self.p.truncation).cuda()
             weight_dim = 2.0*torch.rand((self.p.batch_size,self.p.directions_count),device='cuda') - 1
+            ##TODO check here with authors code
+
             shifted_z = deformator(weight_dim)
             imgs = G(z)
             imgs_shifted = G.gen_shifted(z,shifted_z)
@@ -218,7 +220,10 @@ class Trainer(object):
             regressor_loss.backward()
             regressor_opt.step()
 
-            deformator_opt.zero_grad()
+            ##
+            G.zero_grad()
+            deformator.zero_grad()
+            shift_predictor.zero_grad()
 
             z = make_noise(self.p.batch_size, G.dim_z, self.p.truncation).cuda()
             target_indices, shifts, basis_shift = self.make_shifts(deformator.input_dim)
@@ -243,7 +248,7 @@ class Trainer(object):
             weight_dim = 2.0*torch.rand((self.p.batch_size,self.p.directions_count),device='cuda') - 1
             shifted_z = deformator(weight_dim)
             imgs = G(z)
-            imgs_shifted = G(z,shifted_z)
+            imgs_shifted = G.gen_shifted(z,shifted_z)
             predicted_shift = latent_regressor(imgs,imgs_shifted)
             regressor_loss =  torch.mean(torch.abs(predicted_shift - weight_dim))
 
