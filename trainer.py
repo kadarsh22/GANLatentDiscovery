@@ -119,15 +119,6 @@ class Trainer(object):
             fig_to_image(fig).convert("RGB").save(
                 os.path.join(self.images_dir, '{}_{}.jpg'.format(prefix, step)))
 
-    # def start_from_checkpoint(self, deformator, shift_predictor):
-    #     step = 0
-    #     if os.path.isfile(self.checkpoint):
-    #         state_dict = torch.load(self.checkpoint)
-    #         step = state_dict['step']
-    #         deformator.load_state_dict(state_dict['deformator'])
-    #         shift_predictor.load_state_dict(state_dict['shift_predictor'])
-    #         print('starting from step {}'.format(step))
-    #     return step
 
     def save_checkpoint(self, deformator, shift_predictor, deformator_opt,shift_predictor_opt,step):
         state_dict = {
@@ -169,7 +160,6 @@ class Trainer(object):
 
 
     def train(self, G, deformator, shift_predictor,seed , resume_train, multi_gpu=False):
-        seed = 2
         torch.manual_seed(seed)
         torch.cuda.manual_seed(seed)
         step = 1
