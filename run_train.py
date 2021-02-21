@@ -13,7 +13,19 @@ from latent_shift_predictor import LatentShiftPredictor, LeNetShiftPredictor
 from trainer import Trainer, Params
 from visualization import inspect_all_directions
 from utils import make_noise, save_command_run_params
+import numpy as np
 
+
+def set_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.enabled = False
+    np.random.seed(seed)
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    # return
 
 def main():
     parser = argparse.ArgumentParser(description='Latent space rectification')
@@ -36,6 +48,7 @@ def main():
                         choices=SHIFT_DISTRIDUTION_DICT.keys())
 
     parser.add_argument('--seed', type=int, default=2)
+    parser.add_argument('--resume_train', type=bool, default=True)
     parser.add_argument('--device', type=int, default=0)
     parser.add_argument('--multi_gpu', type=bool, default=False,
                         help='Run generator in parallel. Be aware of old pytorch versions:\
@@ -49,9 +62,7 @@ def main():
                         help='generator out images resolution. Required only for StyleGAN2')
 
     args = parser.parse_args()
-    torch.cuda.set_device(args.device)
-    random.seed(args.seed)
-    torch.random.manual_seed(args.seed)
+    set_seed(args.seed)
 
     save_command_run_params(args)
 
@@ -85,8 +96,7 @@ def main():
     params.max_latent_dim = int(deformator.out_dim)
 
     trainer = Trainer(params, out_dir=args.out)
-    trainer.set_seed(args.seed)
-    trainer.train(G, deformator, shift_predictor, multi_gpu=args.multi_gpu)
+    trainer.train(G, deformator, shift_predictor,args.seed , args.resume_train, multi_gpu=args.multi_gpu)
 
     save_results_charts(G, deformator, params, trainer.log_dir)
 

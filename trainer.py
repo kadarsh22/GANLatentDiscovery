@@ -37,9 +37,8 @@ class Params(object):
         self.shift_weight = 0.25
 
         self.steps_per_log = 10
-        self.steps_per_save = 10000
-        self.steps_per_img_log = 1000
-        self.steps_per_backup = 1000
+        self.steps_per_img_log = 20
+        self.steps_per_backup = 20
 
         self.truncation = None
 
@@ -64,29 +63,19 @@ class Trainer(object):
         os.makedirs(self.models_dir, exist_ok=True)
         os.makedirs(self.images_dir, exist_ok=True)
 
-        self.checkpoint = os.path.join(out_dir, 'checkpoint.pt')
+        self.checkpoint = os.path.join(out_dir, 'checkpoint_20.pt')
         self.writer = SummaryWriter(tb_dir)
         self.out_json = os.path.join(self.log_dir, 'stat.json')
         self.fixed_test_noise = None
-
-
-    @staticmethod
-    def set_seed(seed):
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-        np.random.seed(seed)
-        random.seed(seed)
-        os.environ['PYTHONHASHSEED'] = str(seed)
+        self.out_dir = out_dir
 
     def make_shifts(self, latent_dim):
         target_indices = torch.randint(
-            0, self.p.directions_count, [self.p.batch_size], device='cuda')
+            0, self.p.directions_count, [self.p.batch_size]).cuda()
         if self.p.shift_distribution == ShiftDistribution.NORMAL:
-            shifts = torch.randn(target_indices.shape, device='cuda')
+            shifts = torch.randn(target_indices.shape).cuda()
         elif self.p.shift_distribution == ShiftDistribution.UNIFORM:
-            shifts = 2.0 * torch.rand(target_indices.shape, device='cuda') - 1.0
+            shifts = 2.0 * torch.rand(target_indices.shape).cuda() - 1.0
 
         shifts = self.p.shift_scale * shifts
         shifts[(shifts < self.p.min_shift) & (shifts > 0)] = self.p.min_shift
@@ -98,7 +87,7 @@ class Trainer(object):
         except Exception:
             latent_dim = [latent_dim]
 
-        z_shift = torch.zeros([self.p.batch_size] + latent_dim, device='cuda')
+        z_shift = torch.zeros([self.p.batch_size] + latent_dim).cuda()
         for i, (index, val) in enumerate(zip(target_indices, shifts)):
             z_shift[i][index] += val
 
@@ -130,29 +119,30 @@ class Trainer(object):
             fig_to_image(fig).convert("RGB").save(
                 os.path.join(self.images_dir, '{}_{}.jpg'.format(prefix, step)))
 
-    def start_from_checkpoint(self, deformator, shift_predictor):
-        step = 0
-        if os.path.isfile(self.checkpoint):
-            state_dict = torch.load(self.checkpoint)
-            step = state_dict['step']
-            deformator.load_state_dict(state_dict['deformator'])
-            shift_predictor.load_state_dict(state_dict['shift_predictor'])
-            print('starting from step {}'.format(step))
-        return step
+    # def start_from_checkpoint(self, deformator, shift_predictor):
+    #     step = 0
+    #     if os.path.isfile(self.checkpoint):
+    #         state_dict = torch.load(self.checkpoint)
+    #         step = state_dict['step']
+    #         deformator.load_state_dict(state_dict['deformator'])
+    #         shift_predictor.load_state_dict(state_dict['shift_predictor'])
+    #         print('starting from step {}'.format(step))
+    #     return step
 
-    def save_checkpoint(self, deformator, shift_predictor, step):
+    def save_checkpoint(self, deformator, shift_predictor, deformator_opt,shift_predictor_opt,step):
         state_dict = {
             'step': step,
+            'rng_state': torch.get_rng_state(),
+            'np_rng_state': np.random.get_state(),
+            'random_rng_state': random.getstate(),
             'deformator': deformator.state_dict(),
             'shift_predictor': shift_predictor.state_dict(),
+            'deformator_opt': deformator_opt.state_dict(),
+            'shift_predictor_opt':shift_predictor_opt.state_dict(),
         }
         torch.save(state_dict, self.checkpoint)
+        torch.save(state_dict, os.path.join(self.out_dir, 'checkpoint_'+ str(step)+'.pt'))
 
-    def save_models(self, deformator, shift_predictor, step):
-        torch.save(deformator.state_dict(),
-                   os.path.join(self.models_dir, 'deformator_{}.pt'.format(step)))
-        torch.save(shift_predictor.state_dict(),
-                   os.path.join(self.models_dir, 'shift_predictor_{}.pt'.format(step)))
 
     def log_accuracy(self, G, deformator, shift_predictor, step):
         deformator.eval()
@@ -165,7 +155,7 @@ class Trainer(object):
         shift_predictor.train()
         return accuracy
 
-    def log(self, G, deformator, shift_predictor, step, avgs):
+    def log(self, G, deformator, shift_predictor,shift_predictor_opt,deformator_opt, step, avgs):
         if step % self.p.steps_per_log == 0:
             self.log_train(step, True, [avg.flush() for avg in avgs])
 
@@ -173,14 +163,25 @@ class Trainer(object):
             self.log_interpolation(G, deformator, step)
 
         if step % self.p.steps_per_backup == 0 and step > 0:
-            self.save_checkpoint(deformator, shift_predictor, step)
             accuracy = self.log_accuracy(G, deformator, shift_predictor, step)
             print('Step {} accuracy: {:.3}'.format(step, accuracy.item()))
+            self.save_checkpoint(deformator, shift_predictor,deformator_opt,shift_predictor_opt,step)
 
-        if step % self.p.steps_per_save == 0 and step > 0:
-            self.save_models(deformator, shift_predictor, step)
 
-    def train(self, G, deformator, shift_predictor, multi_gpu=False):
+    def train(self, G, deformator, shift_predictor,seed , resume_train, multi_gpu=False):
+        seed = 2
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
+        step = 1
+
+        if resume_train:
+            checkpoint = torch.load(self.checkpoint)
+            step = checkpoint['step']
+            step = step + 1
+            torch.set_rng_state(checkpoint['rng_state'])
+            np.random.set_state(checkpoint['np_rng_state'])
+            random.setstate(checkpoint['random_rng_state'])
+
         G.cuda().eval()
         deformator.cuda().train()
         shift_predictor.cuda().train()
@@ -189,17 +190,24 @@ class Trainer(object):
         if multi_gpu:
             G = DataParallelPassthrough(G)
 
+        if resume_train:
+            deformator.load_state_dict(checkpoint['deformator'])
+            shift_predictor.load_state_dict(checkpoint['shift_predictor'])
+
         deformator_opt = torch.optim.Adam(deformator.parameters(), lr=self.p.deformator_lr) \
             if deformator.type not in [DeformatorType.ID, DeformatorType.RANDOM] else None
         shift_predictor_opt = torch.optim.Adam(
             shift_predictor.parameters(), lr=self.p.shift_predictor_lr)
 
+        if resume_train:
+            deformator_opt.load_state_dict(checkpoint['deformator_opt'])
+            shift_predictor_opt.load_state_dict(checkpoint['shift_predictor_opt'])
+
         avgs = MeanTracker('percent'), MeanTracker('loss'), MeanTracker('direction_loss'),\
                MeanTracker('shift_loss')
         avg_correct_percent, avg_loss, avg_label_loss, avg_shift_loss = avgs
 
-        recovered_step = self.start_from_checkpoint(deformator, shift_predictor)
-        for step in range(recovered_step, self.p.n_steps, 1):
+        for i in range(step, self.p.n_steps):
             G.zero_grad()
             deformator.zero_grad()
             shift_predictor.zero_grad()
@@ -238,7 +246,7 @@ class Trainer(object):
             avg_label_loss.add(logit_loss.item())
             avg_shift_loss.add(shift_loss)
 
-            self.log(G, deformator, shift_predictor, step, avgs)
+            self.log(G, deformator, shift_predictor,shift_predictor_opt,deformator_opt,i, avgs)
 
 
 @torch.no_grad()

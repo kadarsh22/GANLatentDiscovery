@@ -3,6 +3,8 @@ import sys
 import json
 import torch
 from scipy.stats import truncnorm
+import numpy as np
+import random
 
 
 def make_noise(batch, dim, truncation=None):
