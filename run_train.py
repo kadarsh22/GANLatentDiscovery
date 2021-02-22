@@ -49,7 +49,7 @@ def main():
                         choices=SHIFT_DISTRIDUTION_DICT.keys())
 
     parser.add_argument('--seed', type=int, default=2)
-    parser.add_argument('--resume_train', type=bool, default=False)
+    parser.add_argument('--resume_train', type=bool, default=True)
     parser.add_argument('--device', type=int, default=0)
     parser.add_argument('--multi_gpu', type=bool, default=False,
                         help='Run generator in parallel. Be aware of old pytorch versions:\
