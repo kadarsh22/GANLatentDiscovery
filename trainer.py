@@ -37,8 +37,8 @@ class Params(object):
         self.shift_weight = 0.25
 
         self.steps_per_log = 10
-        self.steps_per_img_log = 2000
-        self.steps_per_backup = 2000
+        self.steps_per_img_log = 1000
+        self.steps_per_backup = 1000
 
         self.truncation = None
 
