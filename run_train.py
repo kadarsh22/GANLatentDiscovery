@@ -10,6 +10,7 @@ from constants import DEFORMATOR_TYPE_DICT, SHIFT_DISTRIDUTION_DICT, WEIGHTS
 from loading import load_generator
 from latent_deformator import LatentDeformator
 from latent_shift_predictor import LatentShiftPredictor, LeNetShiftPredictor
+from regressor import LeNetShiftRegressor,LatentShiftRegressor
 from trainer import Trainer, Params
 from visualization import inspect_all_directions
 from utils import make_noise, save_command_run_params
@@ -83,8 +84,12 @@ def main():
     if args.shift_predictor == 'ResNet':
         shift_predictor = LatentShiftPredictor(
             deformator.input_dim, args.shift_predictor_size).cuda()
+        latent_regressor = LatentShiftRegressor(
+            deformator.input_dim, args.shift_predictor_size).cuda()
     elif args.shift_predictor == 'LeNet':
         shift_predictor = LeNetShiftPredictor(
+            deformator.input_dim, 1 if args.gan_type == 'SN_MNIST' else 3).cuda()
+        latent_regressor = LeNetShiftRegressor(
             deformator.input_dim, 1 if args.gan_type == 'SN_MNIST' else 3).cuda()
 
     # training
@@ -96,7 +101,7 @@ def main():
     params.max_latent_dim = int(deformator.out_dim)
 
     trainer = Trainer(params, out_dir=args.out)
-    trainer.train(G, deformator, shift_predictor,args.seed , args.resume_train, multi_gpu=args.multi_gpu)
+    trainer.train(G, deformator, shift_predictor, latent_regressor, args.seed , args.resume_train, multi_gpu=args.multi_gpu)
 
     save_results_charts(G, deformator, params, trainer.log_dir)
 
