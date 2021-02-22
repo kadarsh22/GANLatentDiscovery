@@ -37,8 +37,8 @@ class Params(object):
         self.shift_weight = 0.25
 
         self.steps_per_log = 10
-        self.steps_per_img_log = 1000
-        self.steps_per_backup = 1000
+        self.steps_per_img_log = 2000
+        self.steps_per_backup = 2000
 
         self.truncation = None
 
@@ -48,7 +48,7 @@ class Params(object):
 
 
 class Trainer(object):
-    def __init__(self, params=Params(), out_dir='', verbose=False):
+    def __init__(self, params=Params(), out_dir='', verbose=True):
         if verbose:
             print('Trainer inited with:\n{}'.format(str(params.__dict__)))
         self.p = params
@@ -102,9 +102,11 @@ class Trainer(object):
         for named_value in stats:
             self.writer.add_scalar(named_value[0], named_value[1], step)
 
-        with open(self.out_json, 'w') as out:
+        with open(self.out_json, 'a+') as out:
+            out.write('step :' + str(step))
             stat_dict = {named_value[0]: named_value[1] for named_value in stats}
             json.dump(stat_dict, out)
+            out.write('\n')
 
     def log_interpolation(self, G, deformator, step):
         noise = make_noise(1, G.dim_z, self.p.truncation).cuda()
