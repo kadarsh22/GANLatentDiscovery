@@ -10,7 +10,7 @@ from constants import DEFORMATOR_TYPE_DICT, SHIFT_DISTRIDUTION_DICT, WEIGHTS
 from loading import load_generator
 from latent_deformator import LatentDeformator
 from latent_shift_predictor import LatentShiftPredictor, LeNetShiftPredictor
-from regressor import LeNetShiftRegressor,LatentShiftRegressor
+from latent_regressor import LeNetShiftRegressor,LatentShiftRegressor
 from trainer import Trainer, Params
 from visualization import inspect_all_directions
 from utils import make_noise, save_command_run_params
