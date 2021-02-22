@@ -37,8 +37,8 @@ class Params(object):
         self.shift_weight = 0.25
 
         self.steps_per_log = 10
-        self.steps_per_img_log = 20
-        self.steps_per_backup = 20
+        self.steps_per_img_log = 1000
+        self.steps_per_backup = 1000
 
         self.truncation = None
 
@@ -63,7 +63,7 @@ class Trainer(object):
         os.makedirs(self.models_dir, exist_ok=True)
         os.makedirs(self.images_dir, exist_ok=True)
 
-        self.checkpoint = os.path.join(out_dir, 'checkpoint_20.pt')
+        self.checkpoint = os.path.join(out_dir, 'checkpoint_latest.pt')
         self.writer = SummaryWriter(tb_dir)
         self.out_json = os.path.join(self.log_dir, 'stat.json')
         self.fixed_test_noise = None
