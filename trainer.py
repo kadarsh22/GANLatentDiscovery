@@ -210,10 +210,10 @@ class Trainer(object):
             #
             z = make_noise(self.p.batch_size, G.dim_z, self.p.truncation).cuda()
             weight_dim = 2.0*torch.rand((self.p.batch_size,self.p.directions_count)).cuda() - 1
-            weight_dim = self.p.shift_scale * weight_dim
-            weight_dim[(weight_dim < self.p.min_shift) & (weight_dim > 0)] = self.p.min_shift
-            weight_dim[(weight_dim > -self.p.min_shift) & (weight_dim < 0)] = -self.p.min_shift
             shifted_z = deformator(weight_dim)
+            shifted_z = self.p.shift_scale * shifted_z
+            shifted_z[(shifted_z < self.p.min_shift) & (shifted_z > 0)] = self.p.min_shift
+            shifted_z[(shifted_z > -self.p.min_shift) & (shifted_z < 0)] = -self.p.min_shift
             imgs = G(z)
             imgs_shifted = G.gen_shifted(z,shifted_z)
             predicted_shift = latent_regressor(imgs.detach(),imgs_shifted.detach())
@@ -246,10 +246,10 @@ class Trainer(object):
 
             z = make_noise(self.p.batch_size, G.dim_z, self.p.truncation).cuda()
             weight_dim = 2.0*torch.rand((self.p.batch_size,self.p.directions_count),device='cuda') - 1
-            weight_dim = self.p.shift_scale * weight_dim
-            weight_dim[(weight_dim < self.p.min_shift) & (weight_dim > 0)] = self.p.min_shift
-            weight_dim[(weight_dim > -self.p.min_shift) & (weight_dim < 0)] = -self.p.min_shift
             shifted_z = deformator(weight_dim)
+            shifted_z= self.p.shift_scale * shifted_z
+            shifted_z[(shifted_z < self.p.min_shift) & (shifted_z > 0)] = self.p.min_shift
+            shifted_z[(shifted_z > -self.p.min_shift) & (shifted_z < 0)] = -self.p.min_shift
             imgs = G(z)
             imgs_shifted = G.gen_shifted(z,shifted_z)
             predicted_shift = latent_regressor(imgs,imgs_shifted)
