@@ -63,7 +63,7 @@ class Trainer(object):
         os.makedirs(self.models_dir, exist_ok=True)
         os.makedirs(self.images_dir, exist_ok=True)
 
-        self.checkpoint = os.path.join(out_dir, 'checkpoint_latest.pt')
+        self.checkpoint = os.path.join(out_dir, 'checkpoint_70000.pt')
         self.writer = SummaryWriter(tb_dir)
         self.out_json = os.path.join(self.log_dir, 'stat.json')
         self.fixed_test_noise = None
@@ -188,8 +188,8 @@ class Trainer(object):
 
         deformator_opt = torch.optim.Adam(deformator.parameters(), lr=self.p.deformator_lr) \
             if deformator.type not in [DeformatorType.ID, DeformatorType.RANDOM] else None
-        shift_predictor_opt = torch.optim.Adam(
-            shift_predictor.parameters(), lr=self.p.shift_predictor_lr)
+        shift_predictor_opt = torch.optim.Adam(shift_predictor.parameters(), lr=self.p.shift_predictor_lr)
+
 
         if resume_train:
             deformator_opt.load_state_dict(checkpoint['deformator_opt'])
@@ -203,6 +203,18 @@ class Trainer(object):
             G.zero_grad()
             deformator.zero_grad()
             shift_predictor.zero_grad()
+
+            z = make_noise(self.p.batch_size, G.dim_z, self.p.truncation).cuda()
+            target_indices, shifts, basis_shift = self.make_shifts(deformator.input_dim)
+            shift = deformator(basis_shift)
+            imgs = G(z)
+            imgs_shifted = G.gen_shifted(z, shift)
+            logits, shift_prediction = shift_predictor(imgs.detach(), imgs_shifted.detach())
+            logit_loss = self.cross_entropy(logits, target_indices)
+            logit_loss.backward()
+
+            shift_predictor_opt.step()
+
 
             z = make_noise(self.p.batch_size, G.dim_z, self.p.truncation).cuda()
             target_indices, shifts, basis_shift = self.make_shifts(deformator.input_dim)
