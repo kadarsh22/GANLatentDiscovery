@@ -64,7 +64,7 @@ class Trainer(object):
         os.makedirs(self.models_dir, exist_ok=True)
         os.makedirs(self.images_dir, exist_ok=True)
 
-        self.checkpoint = os.path.join(out_dir, 'checkpoint_70000.pt')
+        self.checkpoint = os.path.join(out_dir, 'checkpoint_60000.pt')
         self.writer = SummaryWriter(tb_dir)
         self.out_json = os.path.join(self.log_dir, 'stat.json')
         self.fixed_test_noise = None
