@@ -210,18 +210,18 @@ class Trainer(object):
             shift_predictor.zero_grad()
             latent_regressor.zero_grad()
             #
-            z = make_noise(self.p.batch_size, G.dim_z, self.p.truncation).cuda()
-            weight_dim = 2.0*torch.rand((self.p.batch_size,self.p.directions_count)).cuda() - 1
-            weight_dim = self.p.shift_scale * weight_dim
-            weight_dim[(weight_dim < self.p.min_shift) & (weight_dim > 0)] = self.p.min_shift
-            weight_dim[(weight_dim > -self.p.min_shift) & (weight_dim < 0)] = -self.p.min_shift
-            shifted_z = deformator(weight_dim)
-            imgs = G(z)
-            imgs_shifted = G.gen_shifted(z,shifted_z)
-            predicted_shift = latent_regressor(imgs,imgs_shifted)
-            regressor_loss =  torch.mean(torch.abs(predicted_shift - weight_dim))
-            regressor_loss.backward()
-            regressor_opt.step()
+            # z = make_noise(self.p.batch_size, G.dim_z, self.p.truncation).cuda()
+            # weight_dim = 2.0*torch.rand((self.p.batch_size,self.p.directions_count)).cuda() - 1
+            # weight_dim = self.p.shift_scale * weight_dim
+            # weight_dim[(weight_dim < self.p.min_shift) & (weight_dim > 0)] = self.p.min_shift
+            # weight_dim[(weight_dim > -self.p.min_shift) & (weight_dim < 0)] = -self.p.min_shift
+            # shifted_z = deformator(weight_dim)
+            # imgs = G(z)
+            # imgs_shifted = G.gen_shifted(z,shifted_z)
+            # predicted_shift = latent_regressor(imgs,imgs_shifted)
+            # regressor_loss =  torch.mean(torch.abs(predicted_shift - weight_dim))
+            # regressor_loss.backward()
+            # regressor_opt.step()
 
             G.zero_grad()
             deformator.zero_grad()
@@ -243,7 +243,7 @@ class Trainer(object):
                 imgs_shifted = G.gen_shifted(z, shift)
 
             logits, shift_prediction = shift_predictor(imgs, imgs_shifted)
-            # logit_loss = self.p.label_weight * self.cross_entropy(logits, target_indices)
+            logit_loss = self.p.label_weight * self.cross_entropy(logits, target_indices)
             # shift_loss = self.p.shift_weight * torch.mean(torch.abs(shift_prediction - shifts))
             #
             # z = make_noise(self.p.batch_size, G.dim_z, self.p.truncation).cuda()
@@ -258,12 +258,12 @@ class Trainer(object):
             # regressor_loss =  torch.mean(torch.abs(predicted_shift - weight_dim))
             #
             # # total loss
-            # loss = logit_loss + shift_loss + regressor_loss
-            # loss.backward()
+            loss = logit_loss
+            loss.backward()
             #
-            # if deformator_opt is not None:
-            #     deformator_opt.step()
-            # shift_predictor_opt.step()
+            if deformator_opt is not None:
+                deformator_opt.step()
+            shift_predictor_opt.step()
 
             # update statistics trackers
             avg_correct_percent.add(torch.mean(
