@@ -223,26 +223,26 @@ class Trainer(object):
             regressor_loss.backward()
             regressor_opt.step()
 
-            # G.zero_grad()
-            # deformator.zero_grad()
-            # shift_predictor.zero_grad()
-            #
-            # z = make_noise(self.p.batch_size, G.dim_z, self.p.truncation).cuda()
-            # target_indices, shifts, basis_shift = self.make_shifts(deformator.input_dim)
-            #
-            # if should_gen_classes:
-            #     classes = G.mixed_classes(z.shape[0])
-            #
-            # # Deformation
-            # shift = deformator(basis_shift)
-            # if should_gen_classes:
-            #     imgs = G(z, classes)
-            #     imgs_shifted = G.gen_shifted(z, shift, classes)
-            # else:
-            #     imgs = G(z)
-            #     imgs_shifted = G.gen_shifted(z, shift)
-            #
-            # logits, shift_prediction = shift_predictor(imgs, imgs_shifted)
+            G.zero_grad()
+            deformator.zero_grad()
+            shift_predictor.zero_grad()
+
+            z = make_noise(self.p.batch_size, G.dim_z, self.p.truncation).cuda()
+            target_indices, shifts, basis_shift = self.make_shifts(deformator.input_dim)
+
+            if should_gen_classes:
+                classes = G.mixed_classes(z.shape[0])
+
+            # Deformation
+            shift = deformator(basis_shift)
+            if should_gen_classes:
+                imgs = G(z, classes)
+                imgs_shifted = G.gen_shifted(z, shift, classes)
+            else:
+                imgs = G(z)
+                imgs_shifted = G.gen_shifted(z, shift)
+
+            logits, shift_prediction = shift_predictor(imgs, imgs_shifted)
             # logit_loss = self.p.label_weight * self.cross_entropy(logits, target_indices)
             # shift_loss = self.p.shift_weight * torch.mean(torch.abs(shift_prediction - shifts))
             #
@@ -266,11 +266,11 @@ class Trainer(object):
             # shift_predictor_opt.step()
 
             # update statistics trackers
-            avg_correct_percent.add(0)
+            avg_correct_percent.add(torch.mean(
+                    (torch.argmax(logits, dim=1) == target_indices).to(torch.float32)).detach())
             avg_loss.add(0)
             avg_label_loss.add(0)
             avg_shift_loss.add(0)
-            avg_regressor_loss.add(regressor_loss.item())
 
             self.log(G, deformator, shift_predictor,shift_predictor_opt,deformator_opt,i, avgs)
 
