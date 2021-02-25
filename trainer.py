@@ -69,6 +69,7 @@ class Trainer(object):
         self.out_json = os.path.join(self.log_dir, 'stat.json')
         self.fixed_test_noise = None
         self.out_dir = out_dir
+        self.mse_loss = nn.MSELoss()
 
     def make_shifts(self, latent_dim):
         target_indices = torch.randint(
@@ -211,15 +212,20 @@ class Trainer(object):
             #
             z = make_noise(self.p.batch_size, G.dim_z, self.p.truncation).cuda()
             weight_dim = 2.0*torch.rand((self.p.batch_size,self.p.directions_count)).cuda() - 1
+            weight_dim = self.p.shift_scale * weight_dim
+            weight_dim[(weight_dim < self.p.min_shift) & (weight_dim > 0)] = self.p.min_shift
+            weight_dim[(weight_dim > -self.p.min_shift) & (weight_dim < 0)] = -self.p.min_shift
             shifted_z = deformator(weight_dim)
-            shifted_z = self.p.shift_scale * shifted_z
-            shifted_z[(shifted_z < self.p.min_shift) & (shifted_z > 0)] = self.p.min_shift
-            shifted_z[(shifted_z > -self.p.min_shift) & (shifted_z < 0)] = -self.p.min_shift
+            shifted_z_detached = shifted_z.detach()
             imgs = G(z)
             imgs_shifted = G.gen_shifted(z,shifted_z)
             predicted_shift = latent_regressor(imgs,imgs_shifted)
             regressor_loss =  torch.mean(torch.abs(predicted_shift - weight_dim))
-            regressor_loss.backward()
+            reconstructed = deformator(predicted_shift)
+
+            mse_loss = self.mse_loss(reconstructed,shifted_z_detached)
+            loss = mse_loss + regressor_loss
+            loss.backward()
             regressor_opt.step()
 
             # G.zero_grad()
@@ -268,7 +274,7 @@ class Trainer(object):
             avg_correct_percent.add(0)
             avg_loss.add(0)
             avg_label_loss.add(0)
-            avg_shift_loss.add(0)
+            avg_shift_loss.add(mse_loss.item())
             avg_regressor_loss.add(regressor_loss.item())
 
             self.log(G, deformator, shift_predictor,shift_predictor_opt,deformator_opt,i, avgs)
