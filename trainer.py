@@ -244,7 +244,7 @@ class Trainer(object):
 
             logits, shift_prediction = shift_predictor(imgs, imgs_shifted)
             logit_loss = self.p.label_weight * self.cross_entropy(logits, target_indices)
-            # shift_loss = self.p.shift_weight * torch.mean(torch.abs(shift_prediction - shifts))
+            shift_loss = self.p.shift_weight * torch.mean(torch.abs(shift_prediction - shifts))
             #
             # z = make_noise(self.p.batch_size, G.dim_z, self.p.truncation).cuda()
             # weight_dim = 2.0*torch.rand((self.p.batch_size,self.p.directions_count),device='cuda') - 1
@@ -258,7 +258,7 @@ class Trainer(object):
             # regressor_loss =  torch.mean(torch.abs(predicted_shift - weight_dim))
             #
             # # total loss
-            loss = logit_loss
+            loss = logit_loss+ shift_loss
             loss.backward()
             #
             if deformator_opt is not None:
