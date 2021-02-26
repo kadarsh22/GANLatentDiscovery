@@ -42,7 +42,7 @@ class Params(object):
 
         self.steps_per_log = 10
         self.steps_per_img_log = 1000
-        self.steps_per_backup = 1000
+        self.steps_per_backup = 5000
 
         self.truncation = None
 
@@ -67,7 +67,7 @@ class Trainer(object):
         os.makedirs(self.models_dir, exist_ok=True)
         os.makedirs(self.images_dir, exist_ok=True)
 
-        self.checkpoint = os.path.join(out_dir, 'checkpoint_60000.pt')
+        self.checkpoint = os.path.join(out_dir, 'checkpoint_70000.pt')
         self.writer = SummaryWriter(tb_dir)
         self.out_json = os.path.join(self.log_dir, 'stat.json')
         self.fixed_test_noise = None
@@ -169,7 +169,7 @@ class Trainer(object):
         torch.manual_seed(seed)
         torch.cuda.manual_seed(seed)
         step = 1
-
+        resume_train = False
         if resume_train:
             checkpoint = torch.load(self.checkpoint)
             step = checkpoint['step']
@@ -209,10 +209,10 @@ class Trainer(object):
 
             z = make_noise(self.p.batch_size, G.dim_z, self.p.truncation).cuda()
             weight_dim = 2.0*torch.rand((self.p.batch_size,self.p.directions_count),device='cuda') - 1
+            weight_dim = self.p.shift_scale * weight_dim
+            weight_dim[(shifted_z < self.p.min_shift) & (weight_dim > 0)] = self.p.min_shift
+            weight_dim[(shifted_z > -self.p.min_shift) & (weight_dim < 0)] = -self.p.min_shift
             shifted_z = deformator(weight_dim)
-#            shifted_z= self.p.shift_scale * shifted_z
-#            shifted_z[(shifted_z < self.p.min_shift) & (shifted_z > 0)] = self.p.min_shift
-#            shifted_z[(shifted_z > -self.p.min_shift) & (shifted_z < 0)] = -self.p.min_shift
             imgs = G(z)
             imgs_shifted = G.gen_shifted(z,shifted_z)
             predicted_shift = latent_regressor(imgs,imgs_shifted)
@@ -252,10 +252,11 @@ def validate_classifier(G, deformator, shift_predictor, params_dict=None, traine
 def train_classifier(G, deformator,trainer):
     shift_predictor = LeNetShiftPredictor(deformator.input_dim, ).cuda()
     shift_predictor_opt = torch.optim.Adam(
-        shift_predictor.parameters(), lr=trainer.p.shift_predictor_lr)
+        shift_predictor.parameters(), lr=0.01)
     training_loss = []
     shift_predictor.train()
     for i in range(2000):
+        shift_predictor_opt.zero_grad()
         z = make_noise(trainer.p.batch_size, G.dim_z, trainer.p.truncation).cuda()
         target_indices, shifts, basis_shift = trainer.make_shifts(deformator.input_dim)
         shift = deformator(basis_shift)
@@ -267,6 +268,7 @@ def train_classifier(G, deformator,trainer):
         logit_loss.backward()
         shift_predictor_opt.step()
         training_loss.append(logit_loss.item())
+        print(logit_loss.item())
     print("Training_loss : ",sum(training_loss)/len(training_loss))
     return shift_predictor
 
