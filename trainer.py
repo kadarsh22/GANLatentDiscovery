@@ -10,9 +10,12 @@ from utils import make_noise, is_conditional
 from train_log import MeanTracker
 from visualization import make_interpolation_chart, fig_to_image
 from latent_deformator import DeformatorType
+from latent_shift_predictor import LatentShiftPredictor, LeNetShiftPredictor
 import numpy as np
 import random
 
+
+cross_entropy = nn.CrossEntropyLoss()
 
 class ShiftDistribution(Enum):
     NORMAL = 0,
@@ -27,6 +30,7 @@ class Params(object):
 
         self.deformator_lr = 0.0001
         self.shift_predictor_lr = 0.0001
+        self.regressor_lr = 0.001
         self.n_steps = int(1e+5)
         self.batch_size = 32
 
@@ -63,7 +67,7 @@ class Trainer(object):
         os.makedirs(self.models_dir, exist_ok=True)
         os.makedirs(self.images_dir, exist_ok=True)
 
-        self.checkpoint = os.path.join(out_dir, 'checkpoint_latest.pt')
+        self.checkpoint = os.path.join(out_dir, 'checkpoint_60000.pt')
         self.writer = SummaryWriter(tb_dir)
         self.out_json = os.path.join(self.log_dir, 'stat.json')
         self.fixed_test_noise = None
@@ -137,10 +141,10 @@ class Trainer(object):
         torch.save(state_dict, os.path.join(self.out_dir, 'checkpoint_'+ str(step)+'.pt'))
 
 
-    def log_accuracy(self, G, deformator, shift_predictor, step):
+    def log_accuracy(self, G, deformator, step):
         deformator.eval()
+        shift_predictor = train_classifier(G,deformator,trainer=self)
         shift_predictor.eval()
-
         accuracy = validate_classifier(G, deformator, shift_predictor, trainer=self)
         self.writer.add_scalar('accuracy', accuracy.item(), step)
 
@@ -148,7 +152,7 @@ class Trainer(object):
         shift_predictor.train()
         return accuracy
 
-    def log(self, G, deformator, shift_predictor,shift_predictor_opt,deformator_opt, step, avgs):
+    def log(self, G, deformator,args,deformator_opt, step, avgs):
         if step % self.p.steps_per_log == 0:
             self.log_train(step, True, [avg.flush() for avg in avgs])
 
@@ -156,12 +160,12 @@ class Trainer(object):
             self.log_interpolation(G, deformator, step)
 
         if step % self.p.steps_per_backup == 0 and step > 0:
-            accuracy = self.log_accuracy(G, deformator, shift_predictor, step)
+            accuracy = self.log_accuracy(G, deformator, step)
             print('Step {} accuracy: {:.3}'.format(step, accuracy.item()))
-            self.save_checkpoint(deformator, shift_predictor,deformator_opt,shift_predictor_opt,step)
+            # self.save_checkpoint(deformator, shift_predictor,deformator_opt,shift_predictor_opt,step)
 
 
-    def train(self, G, deformator, shift_predictor,seed , resume_train, multi_gpu=False):
+    def train(self, G, deformator,latent_regressor,args, seed , resume_train, multi_gpu=False):
         torch.manual_seed(seed)
         torch.cuda.manual_seed(seed)
         step = 1
@@ -176,7 +180,7 @@ class Trainer(object):
 
         G.cuda().eval()
         deformator.cuda().train()
-        shift_predictor.cuda().train()
+        latent_regressor.cuda().train()
 
         should_gen_classes = is_conditional(G)
         if multi_gpu:
@@ -184,61 +188,46 @@ class Trainer(object):
 
         if resume_train:
             deformator.load_state_dict(checkpoint['deformator'])
-            shift_predictor.load_state_dict(checkpoint['shift_predictor'])
+
 
         deformator_opt = torch.optim.Adam(deformator.parameters(), lr=self.p.deformator_lr) \
             if deformator.type not in [DeformatorType.ID, DeformatorType.RANDOM] else None
-        shift_predictor_opt = torch.optim.Adam(
-            shift_predictor.parameters(), lr=self.p.shift_predictor_lr)
+        regressor_opt = torch.optim.Adam([{'params': latent_regressor.parameters()},
+                                        {'params': deformator.parameters()}], lr=self.p.regressor_lr)
 
         if resume_train:
             deformator_opt.load_state_dict(checkpoint['deformator_opt'])
-            shift_predictor_opt.load_state_dict(checkpoint['shift_predictor_opt'])
 
         avgs = MeanTracker('percent'), MeanTracker('loss'), MeanTracker('direction_loss'),\
-               MeanTracker('shift_loss')
-        avg_correct_percent, avg_loss, avg_label_loss, avg_shift_loss = avgs
+               MeanTracker('shift_loss') , MeanTracker('regressor_loss')
+        avg_correct_percent, avg_loss, avg_label_loss, avg_shift_loss, avg_regressor_loss = avgs
 
         for i in range(step, self.p.n_steps):
             G.zero_grad()
             deformator.zero_grad()
-            shift_predictor.zero_grad()
+            latent_regressor.zero_grad()
 
             z = make_noise(self.p.batch_size, G.dim_z, self.p.truncation).cuda()
-            target_indices, shifts, basis_shift = self.make_shifts(deformator.input_dim)
+            weight_dim = 2.0*torch.rand((self.p.batch_size,self.p.directions_count),device='cuda') - 1
+            shifted_z = deformator(weight_dim)
+#            shifted_z= self.p.shift_scale * shifted_z
+#            shifted_z[(shifted_z < self.p.min_shift) & (shifted_z > 0)] = self.p.min_shift
+#            shifted_z[(shifted_z > -self.p.min_shift) & (shifted_z < 0)] = -self.p.min_shift
+            imgs = G(z)
+            imgs_shifted = G.gen_shifted(z,shifted_z)
+            predicted_shift = latent_regressor(imgs,imgs_shifted)
+            regressor_loss =  torch.mean(torch.abs(predicted_shift - weight_dim))
+            regressor_loss.backward()
+            regressor_opt.step()
 
-            if should_gen_classes:
-                classes = G.mixed_classes(z.shape[0])
-
-            # Deformation
-            shift = deformator(basis_shift)
-            if should_gen_classes:
-                imgs = G(z, classes)
-                imgs_shifted = G.gen_shifted(z, shift, classes)
-            else:
-                imgs = G(z)
-                imgs_shifted = G.gen_shifted(z, shift)
-
-            logits, shift_prediction = shift_predictor(imgs, imgs_shifted)
-            logit_loss = self.p.label_weight * self.cross_entropy(logits, target_indices)
-            shift_loss = self.p.shift_weight * torch.mean(torch.abs(shift_prediction - shifts))
-
-            # total loss
-            loss = logit_loss + shift_loss
-            loss.backward()
-
-            if deformator_opt is not None:
-                deformator_opt.step()
-            shift_predictor_opt.step()
 
             # update statistics trackers
-            avg_correct_percent.add(torch.mean(
-                    (torch.argmax(logits, dim=1) == target_indices).to(torch.float32)).detach())
-            avg_loss.add(loss.item())
-            avg_label_loss.add(logit_loss.item())
-            avg_shift_loss.add(shift_loss)
+            avg_correct_percent.add(0)
+            avg_loss.add(regressor_loss.item())
+            avg_label_loss.add(0)
+            avg_shift_loss.add(0)
 
-            self.log(G, deformator, shift_predictor,shift_predictor_opt,deformator_opt,i, avgs)
+            self.log(G, deformator, args, deformator_opt,i, avgs)
 
 
 @torch.no_grad()
@@ -259,3 +248,25 @@ def validate_classifier(G, deformator, shift_predictor, params_dict=None, traine
         percents[step] = (torch.argmax(logits, dim=1) == target_indices).to(torch.float32).mean()
 
     return percents.mean()
+
+def train_classifier(G, deformator,trainer):
+    shift_predictor = LeNetShiftPredictor(deformator.input_dim, ).cuda()
+    shift_predictor_opt = torch.optim.Adam(
+        shift_predictor.parameters(), lr=trainer.p.shift_predictor_lr)
+    training_loss = []
+    shift_predictor.train()
+    for i in range(2000):
+        z = make_noise(trainer.p.batch_size, G.dim_z, trainer.p.truncation).cuda()
+        target_indices, shifts, basis_shift = trainer.make_shifts(deformator.input_dim)
+        shift = deformator(basis_shift)
+        imgs = G(z)
+        imgs_shifted = G.gen_shifted(z, shift)
+
+        logits,_ = shift_predictor(imgs.detach(), imgs_shifted.detach())
+        logit_loss = trainer.p.label_weight * cross_entropy(logits, target_indices)
+        logit_loss.backward()
+        shift_predictor_opt.step()
+        training_loss.append(logit_loss.item())
+    print("Training_loss : ",sum(training_loss)/len(training_loss))
+    return shift_predictor
+
