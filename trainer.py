@@ -267,7 +267,7 @@ class Trainer(object):
                 total = 0
                 classifier.eval()
                 with torch.no_grad():
-                    for k in range(1000):
+                    for k in range(200):
                         label_real = torch.full((self.p.batch_size,), 1, dtype=torch.float32, device='cuda')
                         label_fake = torch.full((self.p.batch_size,), 0, dtype=torch.float32, device='cuda')
                         z = make_noise(self.p.batch_size, G.dim_z, self.p.truncation).cuda()
@@ -309,6 +309,9 @@ class Trainer(object):
 
                     print('training loss : ', sum(training_loss) / len(training_loss), "accuracy :", accuracy)
                     training_loss = []
+        torch.save(classifier, 'pretrained_DISclassifier')
+
+
 
 
 
