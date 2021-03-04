@@ -12,6 +12,7 @@ from visualization import make_interpolation_chart, fig_to_image
 from latent_deformator import DeformatorType
 import numpy as np
 import random
+from classifier import CRDiscriminator
 
 
 class ShiftDistribution(Enum):
@@ -165,7 +166,9 @@ class Trainer(object):
         torch.manual_seed(seed)
         torch.cuda.manual_seed(seed)
         step = 1
-
+        # classifier = CRDiscriminator(dim_c_cont=2)
+        resume_train = True
+        classifier = torch.load('pretrained_DISclassifier')
         if resume_train:
             checkpoint = torch.load(self.checkpoint)
             step = checkpoint['step']
@@ -198,14 +201,21 @@ class Trainer(object):
         avgs = MeanTracker('percent'), MeanTracker('loss'), MeanTracker('direction_loss'),\
                MeanTracker('shift_loss')
         avg_correct_percent, avg_loss, avg_label_loss, avg_shift_loss = avgs
+        adverserial_loss =nn.CrossEntropyLoss()
 
         for i in range(step, self.p.n_steps):
             G.zero_grad()
             deformator.zero_grad()
             shift_predictor.zero_grad()
 
+            label_real = torch.full((128,), 1, dtype=torch.long, device='cuda')
+            label_fake = torch.full((128,), 0, dtype=torch.long, device='cuda')
+            labels = torch.cat((label_real, label_fake))
+
             z = make_noise(self.p.batch_size, G.dim_z, self.p.truncation).cuda()
             target_indices, shifts, basis_shift = self.make_shifts(deformator.input_dim)
+
+
 
             if should_gen_classes:
                 classes = G.mixed_classes(z.shape[0])
@@ -219,12 +229,42 @@ class Trainer(object):
                 imgs = G(z)
                 imgs_shifted = G.gen_shifted(z, shift)
 
+            entangled_vectors = torch.zeros((self.p.batch_size,self.p.directions_count))
+            for vec in entangled_vectors:
+                num_ones = random.randint(2,10)
+                one_idx = random.sample(range(self.p.directions_count),k=num_ones)
+                for idx in one_idx:
+                    vec[idx] = 1
+
+            shifts_new = torch.randn(entangled_vectors.shape).cuda()
+            shifted = entangled_vectors.cuda()*shifts_new
+            shifted = self.p.shift_scale * shifted
+
+            shifted[(shifted < self.p.min_shift) & (shifted > 0)] = self.p.min_shift
+            shifted[(shifted > -self.p.min_shift) & (shifted < 0)] = -self.p.min_shift
+
+            shift_entangled = deformator(shifted)
+            imgs_entangled = G.gen_shifted(z, shift_entangled)
+
+
             logits, shift_prediction = shift_predictor(imgs, imgs_shifted)
             logit_loss = self.p.label_weight * self.cross_entropy(logits, target_indices)
             shift_loss = self.p.shift_weight * torch.mean(torch.abs(shift_prediction - shifts))
 
+            images = torch.cat((imgs_shifted, imgs_entangled))
+            ref_images = torch.cat((imgs, imgs))
+
+            shuffled_indices = torch.randint(0,images.size(0), (images.size(0),))
+            ref_images = ref_images[shuffled_indices]
+            images = images[shuffled_indices]
+            labels = labels[shuffled_indices]
+
+            prob = classifier(ref_images.cuda(), images.cuda())
+            loss_classifier = adverserial_loss(prob, labels)
+
+
             # total loss
-            loss = logit_loss + shift_loss
+            loss = logit_loss + shift_loss + loss_classifier
             loss.backward()
 
             if deformator_opt is not None:
