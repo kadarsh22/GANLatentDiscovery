@@ -12,7 +12,7 @@ from visualization import make_interpolation_chart, fig_to_image
 from latent_deformator import DeformatorType
 import numpy as np
 import random
-from classifier import CRDiscriminator
+from classifier import CRDiscriminator,Classifier
 
 
 class ShiftDistribution(Enum):
@@ -212,8 +212,8 @@ class Trainer(object):
 
             cr_optimizer.zero_grad()
 
-            label_real = torch.full((64,), 1, dtype=torch.long, device='cuda')
-            label_fake = torch.full((64,), 0, dtype=torch.long, device='cuda')
+            label_real = torch.full((128,), 1, dtype=torch.long, device='cuda')
+            label_fake = torch.full((128,), 0, dtype=torch.long, device='cuda')
             labels = torch.cat((label_real, label_fake))
 
             z = make_noise(self.p.batch_size, G.dim_z, self.p.truncation).cuda()
@@ -234,7 +234,7 @@ class Trainer(object):
             entangled_vectors = torch.zeros((self.p.batch_size,self.p.directions_count))
             for vec in entangled_vectors:
                 num_ones = random.randint(2,10)
-                one_idx = random.sample(range(64),k=num_ones)
+                one_idx = random.sample(range(self.p.directions_count),k=num_ones)
                 for idx in one_idx:
                     vec[idx] = 1
 
@@ -248,8 +248,8 @@ class Trainer(object):
             shift_entangled = deformator(shifted)
             imgs_entangled = G.gen_shifted(z, shift_entangled)
 
-            images = torch.cat((imgs_disentagled, imgs_entangled))
-            ref_images = torch.cat((imgs, imgs))
+            images = torch.cat((imgs_disentagled.detach(), imgs_entangled.detach()))
+            ref_images = torch.cat((imgs.detach(), imgs.detach()))
 
             shuffled_indices = torch.randint(0,images.size(0), (images.size(0),))
             ref_images = ref_images[shuffled_indices]
@@ -268,8 +268,8 @@ class Trainer(object):
                 classifier.eval()
                 with torch.no_grad():
                     for k in range(1000):
-                        label_real = torch.full((64,), 1, dtype=torch.float32, device='cuda')
-                        label_fake = torch.full((64,), 0, dtype=torch.float32, device='cuda')
+                        label_real = torch.full((self.p.batch_size,), 1, dtype=torch.float32, device='cuda')
+                        label_fake = torch.full((self.p.batch_size,), 0, dtype=torch.float32, device='cuda')
                         z = make_noise(self.p.batch_size, G.dim_z, self.p.truncation).cuda()
                         target_indices, shifts, basis_shift = self.make_shifts(deformator.input_dim)
                         shift = deformator(basis_shift)
