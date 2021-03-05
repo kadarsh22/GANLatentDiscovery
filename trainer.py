@@ -5,6 +5,7 @@ import torch
 from torch import nn
 from tensorboardX import SummaryWriter
 from torch_tools.modules import DataParallelPassthrough
+from crdiscriminator import CRDiscriminator
 
 from utils import make_noise, is_conditional
 from train_log import MeanTracker
@@ -63,7 +64,7 @@ class Trainer(object):
         os.makedirs(self.models_dir, exist_ok=True)
         os.makedirs(self.images_dir, exist_ok=True)
 
-        self.checkpoint = os.path.join(out_dir, 'checkpoint_latest.pt')
+        self.checkpoint = os.path.join(out_dir, 'checkpoint_70000.pt')
         self.writer = SummaryWriter(tb_dir)
         self.out_json = os.path.join(self.log_dir, 'stat.json')
         self.fixed_test_noise = None
@@ -195,11 +196,74 @@ class Trainer(object):
             deformator_opt.load_state_dict(checkpoint['deformator_opt'])
             shift_predictor_opt.load_state_dict(checkpoint['shift_predictor_opt'])
 
+        classifier = CRDiscriminator(dim_c_cont=2)
+
         avgs = MeanTracker('percent'), MeanTracker('loss'), MeanTracker('direction_loss'),\
-               MeanTracker('shift_loss')
-        avg_correct_percent, avg_loss, avg_label_loss, avg_shift_loss = avgs
+               MeanTracker('shift_loss'),MeanTracker('cr_loss')
+        avg_correct_percent, avg_loss, avg_label_loss, avg_shift_loss ,avg_cr_loss= avgs
+
+        cr_optimizer = torch.optim.Adam([{'params': classifier.parameters()}],
+                                       lr=0.002,betas=(0.5, 0.999))
+        categorical_loss = torch.nn.CrossEntropyLoss()
+
+        label_dis = torch.full((64,), 1, dtype=torch.long, device='cuda')
+        label_ent = torch.full((64,), 0, dtype=torch.long, device='cuda')
 
         for i in range(step, self.p.n_steps):
+
+            G.zero_grad()
+            deformator.zero_grad()
+            shift_predictor.zero_grad()
+            classifier.zero_grad()
+
+
+            z = make_noise(self.p.batch_size, G.dim_z, self.p.truncation).cuda()
+            target_indices, shifts, basis_shift = self.make_shifts(deformator.input_dim)
+
+            if should_gen_classes:
+                classes = G.mixed_classes(z.shape[0])
+
+            # Deformation
+            shift = deformator(basis_shift)
+            if should_gen_classes:
+                imgs = G(z, classes)
+                imgs_shifted = G.gen_shifted(z, shift, classes)
+            else:
+                imgs = G(z)
+                imgs_shifted = G.gen_shifted(z, shift)
+
+            labels = torch.cat((label_dis, label_ent))
+
+            entangled_vectors = torch.zeros((self.p.batch_size, self.p.directions_count))
+            for vec in entangled_vectors:
+                num_ones = random.randint(2, 10)
+                one_idx = random.sample(range(self.p.directions_count), k=num_ones)
+                for idx in one_idx:
+                    vec[idx] = 1
+
+            shifts_new = torch.randn(entangled_vectors.shape).cuda()
+            shifted = entangled_vectors.cuda() * shifts_new
+            shifted = self.p.shift_scale * shifted
+
+            shifted[(shifted < self.p.min_shift) & (shifted > 0)] = self.p.min_shift
+            shifted[(shifted > -self.p.min_shift) & (shifted < 0)] = -self.p.min_shift
+
+            shift_entangled = deformator(shifted)
+            imgs_entangled = G.gen_shifted(z, shift_entangled)
+
+            images = torch.cat((imgs_shifted, imgs_entangled))
+            ref_images = torch.cat((imgs, imgs))
+
+            shuffled_indices = torch.randint(0, images.size(0), (images.size(0),))
+            ref_images = ref_images[shuffled_indices]
+            images = images[shuffled_indices]
+            labels = labels[shuffled_indices]
+
+            prob = classifier(ref_images.detach().cuda(), images.detach().cuda())
+            loss_classifier = categorical_loss(prob, labels)
+            loss_classifier.backward()
+            cr_optimizer.step()
+
             G.zero_grad()
             deformator.zero_grad()
             shift_predictor.zero_grad()
@@ -219,12 +283,43 @@ class Trainer(object):
                 imgs = G(z)
                 imgs_shifted = G.gen_shifted(z, shift)
 
+
             logits, shift_prediction = shift_predictor(imgs, imgs_shifted)
             logit_loss = self.p.label_weight * self.cross_entropy(logits, target_indices)
             shift_loss = self.p.shift_weight * torch.mean(torch.abs(shift_prediction - shifts))
 
+            labels = torch.cat((label_dis, label_ent))
+
+            entangled_vectors = torch.zeros((self.p.batch_size, self.p.directions_count))
+            for vec in entangled_vectors:
+                num_ones = random.randint(2, 10)
+                one_idx = random.sample(range(self.p.directions_count), k=num_ones)
+                for idx in one_idx:
+                    vec[idx] = 1
+
+            shifts_new = torch.randn(entangled_vectors.shape).cuda()
+            shifted = entangled_vectors.cuda() * shifts_new
+            shifted = self.p.shift_scale * shifted
+
+            shifted[(shifted < self.p.min_shift) & (shifted > 0)] = self.p.min_shift
+            shifted[(shifted > -self.p.min_shift) & (shifted < 0)] = -self.p.min_shift
+
+            shift_entangled = deformator(shifted)
+            imgs_entangled = G.gen_shifted(z, shift_entangled)
+
+            images = torch.cat((imgs_shifted, imgs_entangled))
+            ref_images = torch.cat((imgs, imgs))
+
+            shuffled_indices = torch.randint(0, images.size(0), (images.size(0),))
+            ref_images = ref_images[shuffled_indices]
+            images = images[shuffled_indices]
+            labels = labels[shuffled_indices]
+
+            prob = classifier(ref_images.cuda(), images.cuda())
+            loss_classifier = categorical_loss(prob, labels)
+
             # total loss
-            loss = logit_loss + shift_loss
+            loss = logit_loss + shift_loss + loss_classifier
             loss.backward()
 
             if deformator_opt is not None:
@@ -236,7 +331,8 @@ class Trainer(object):
                     (torch.argmax(logits, dim=1) == target_indices).to(torch.float32)).detach())
             avg_loss.add(loss.item())
             avg_label_loss.add(logit_loss.item())
-            avg_shift_loss.add(shift_loss)
+            avg_shift_loss.add(shift_loss.item())
+            avg_cr_loss.add(loss_classifier.item())
 
             self.log(G, deformator, shift_predictor,shift_predictor_opt,deformator_opt,i, avgs)
 
