@@ -11,9 +11,12 @@ from utils import make_noise, is_conditional
 from train_log import MeanTracker
 from visualization import make_interpolation_chart, fig_to_image
 from latent_deformator import DeformatorType
+from latent_shift_predictor import LatentShiftPredictor, LeNetShiftPredictor
 import numpy as np
 import random
 
+
+cross_entropy = nn.CrossEntropyLoss()
 
 class ShiftDistribution(Enum):
     NORMAL = 0,
@@ -138,8 +141,9 @@ class Trainer(object):
         torch.save(state_dict, os.path.join(self.out_dir, 'checkpoint_'+ str(step)+'.pt'))
 
 
-    def log_accuracy(self, G, deformator, shift_predictor, step):
+    def log_accuracy(self, G, deformator, step):
         deformator.eval()
+        shift_predictor = train_classifier(G,deformator,trainer=self)
         shift_predictor.eval()
 
         accuracy = validate_classifier(G, deformator, shift_predictor, trainer=self)
@@ -157,7 +161,7 @@ class Trainer(object):
             self.log_interpolation(G, deformator, step)
 
         if step % self.p.steps_per_backup == 0 and step > 0:
-            accuracy = self.log_accuracy(G, deformator, shift_predictor, step)
+            accuracy = self.log_accuracy(G, deformator,step)
             print('Step {} accuracy: {:.3}'.format(step, accuracy.item()))
             self.save_checkpoint(deformator, shift_predictor,deformator_opt,shift_predictor_opt,step)
 
@@ -355,3 +359,27 @@ def validate_classifier(G, deformator, shift_predictor, params_dict=None, traine
         percents[step] = (torch.argmax(logits, dim=1) == target_indices).to(torch.float32).mean()
 
     return percents.mean()
+
+def train_classifier(G, deformator,trainer):
+    shift_predictor = LeNetShiftPredictor(deformator.input_dim, ).cuda()
+    shift_predictor_opt = torch.optim.Adam(
+        shift_predictor.parameters(), lr=0.01)
+    training_loss = []
+    shift_predictor.train()
+    for i in range(2000):
+        shift_predictor_opt.zero_grad()
+        z = make_noise(trainer.p.batch_size, G.dim_z, trainer.p.truncation).cuda()
+        target_indices, shifts, basis_shift = trainer.make_shifts(deformator.input_dim)
+        shift = deformator(basis_shift)
+        imgs = G(z)
+        imgs_shifted = G.gen_shifted(z, shift)
+
+        logits,_ = shift_predictor(imgs.detach(), imgs_shifted.detach())
+        logit_loss = trainer.p.label_weight * cross_entropy(logits, target_indices)
+        logit_loss.backward()
+        shift_predictor_opt.step()
+        training_loss.append(logit_loss.item())
+        print(logit_loss.item())
+    print("Training_loss : ",sum(training_loss)/len(training_loss))
+    return shift_predictor
+
